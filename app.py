@@ -2,9 +2,8 @@ from flask import Flask, render_template, request, jsonify
 import os
 import pandas as pd
 import numpy as np
-import onnxruntime as ort
 
-# Inline necessary constants from train_model.py to avoid importing torch/PyTorch
+# Constants
 BASE_TO_INT = {'A': 0, 'C': 1, 'G': 2, 'T': 3, 'N': 4}
 MAX_LEN = 1170
 
@@ -12,15 +11,118 @@ app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'uploads'
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# Load ONNX model weights
-onnx_path = os.path.join(os.path.dirname(__file__), 'enhancer_model.onnx')
+# Load model weights
+npz_path = os.path.join(os.path.dirname(__file__), 'enhancer_model_weights.npz')
 try:
-    # Use CPU Execution Provider for serverless Vercel environment
-    ort_sess = ort.InferenceSession(onnx_path, providers=['CPUExecutionProvider'])
-    print("Successfully loaded ONNX model weights.")
+    weights = np.load(npz_path)
+    print("Successfully loaded NumPy model weights.")
 except Exception as e:
-    print(f"Warning: Could not load ONNX model from {onnx_path}: {e}")
-    ort_sess = None
+    print(f"Warning: Could not load weights from {npz_path}: {e}")
+    weights = None
+
+def sigmoid(x):
+    # Clip to avoid overflow/underflow warnings
+    x = np.clip(x, -500, 500)
+    return 1 / (1 + np.exp(-x))
+
+def numpy_predict(x):
+    # x is a NumPy array of shape (batch_size, MAX_LEN)
+    if weights is None:
+        print("NumPy weights not loaded. Returning default prediction.")
+        return np.full(x.shape[0], 0.5)
+        
+    try:
+        embed_w = weights['embedding.weight']
+        conv_w = weights['conv1.weight']
+        conv_b = weights['conv1.bias']
+        
+        lstm_w_ih = weights['lstm.weight_ih_l0']
+        lstm_w_hh = weights['lstm.weight_hh_l0']
+        lstm_b_ih = weights['lstm.bias_ih_l0']
+        lstm_b_hh = weights['lstm.bias_hh_l0']
+        
+        lstm_w_ih_rev = weights['lstm.weight_ih_l0_reverse']
+        lstm_w_hh_rev = weights['lstm.weight_hh_l0_reverse']
+        lstm_b_ih_rev = weights['lstm.bias_ih_l0_reverse']
+        lstm_b_hh_rev = weights['lstm.bias_hh_l0_reverse']
+        
+        fc1_w = weights['fc1.weight']
+        fc1_b = weights['fc1.bias']
+        fc2_w = weights['fc2.weight']
+        fc2_b = weights['fc2.bias']
+        
+        batch_size, seq_len = x.shape
+        
+        # 1. Embedding -> (batch, seq_len, 16)
+        embed = embed_w[x]
+        
+        # 2. Conv1D with padding=2
+        # Pad sequence dimension (axis 1) by 2 on left and 2 on right
+        embed_padded = np.pad(embed, ((0, 0), (2, 2), (0, 0)), mode='constant', constant_values=0)
+        L_out = seq_len
+        conv_out = np.zeros((batch_size, L_out, 32))
+        conv_w_flat = conv_w.reshape(32, -1)
+        
+        for t in range(L_out):
+            window = embed_padded[:, t:t+5, :].transpose(0, 2, 1).reshape(batch_size, -1)
+            conv_out[:, t, :] = np.dot(window, conv_w_flat.T) + conv_b
+            
+        conv_out = np.maximum(conv_out, 0)  # ReLU
+        
+        # 3. MaxPool1D (stride=8, kernel=8)
+        L_pool = L_out // 8
+        conv_out_truncated = conv_out[:, :L_pool * 8, :]
+        reshaped = conv_out_truncated.reshape(batch_size, L_pool, 8, 32)
+        pooled = np.max(reshaped, axis=2)  # shape: (batch, L_pool, 32)
+        
+        # 4. BiLSTM
+        hidden_size = 64
+        
+        # Forward LSTM
+        h_f = np.zeros((batch_size, hidden_size))
+        c_f = np.zeros((batch_size, hidden_size))
+        bias_f = lstm_b_ih + lstm_b_hh
+        
+        for t in range(L_pool):
+            x_t = pooled[:, t, :]
+            gates = np.dot(x_t, lstm_w_ih.T) + np.dot(h_f, lstm_w_hh.T) + bias_f
+            i = sigmoid(gates[:, :hidden_size])
+            f = sigmoid(gates[:, hidden_size:2*hidden_size])
+            g = np.tanh(gates[:, 2*hidden_size:3*hidden_size])
+            o = sigmoid(gates[:, 3*hidden_size:])
+            c_f = f * c_f + i * g
+            h_f = o * np.tanh(c_f)
+            
+        # Backward LSTM
+        h_b = np.zeros((batch_size, hidden_size))
+        c_b = np.zeros((batch_size, hidden_size))
+        bias_b = lstm_b_ih_rev + lstm_b_hh_rev
+        
+        for t in reversed(range(L_pool)):
+            x_t = pooled[:, t, :]
+            gates = np.dot(x_t, lstm_w_ih_rev.T) + np.dot(h_b, lstm_w_hh_rev.T) + bias_b
+            i = sigmoid(gates[:, :hidden_size])
+            f = sigmoid(gates[:, hidden_size:2*hidden_size])
+            g = np.tanh(gates[:, 2*hidden_size:3*hidden_size])
+            o = sigmoid(gates[:, 3*hidden_size:])
+            c_b = f * c_b + i * g
+            h_b = o * np.tanh(c_b)
+            
+        # Concatenate forward and backward final states -> (batch, 128)
+        hidden = np.concatenate((h_f, h_b), axis=1)
+        
+        # 5. FC1
+        fc1_out = np.dot(hidden, fc1_w.T) + fc1_b
+        fc1_out = np.maximum(fc1_out, 0)  # ReLU
+        
+        # 6. FC2
+        logits = np.dot(fc1_out, fc2_w.T) + fc2_b
+        probs = sigmoid(logits)
+        
+        return probs.squeeze(axis=-1)
+    except Exception as e:
+        print("Prediction error in NumPy forward pass:", e)
+        return np.full(x.shape[0], 0.5)
 
 def predict_sequence(seq):
     seq = seq.upper()
@@ -29,25 +131,10 @@ def predict_sequence(seq):
         if i >= MAX_LEN: break
         seq_encoded[i] = BASE_TO_INT.get(base, 4)
     
-    if ort_sess is None:
-        print("ONNX session not initialized. Returning fallback prediction.")
-        return 0.5
-        
-    try:
-        input_name = ort_sess.get_inputs()[0].name
-        output_name = ort_sess.get_outputs()[0].name
-        
-        # Batch of size 1: shape (1, MAX_LEN)
-        batch = np.expand_dims(seq_encoded, axis=0)
-        ort_outs = ort_sess.run([output_name], {input_name: batch})
-        logits = ort_outs[0]
-        
-        # Apply sigmoid to convert logits to probabilities
-        prob = 1 / (1 + np.exp(-logits))
-        return float(prob[0])
-    except Exception as e:
-        print("Prediction error in ONNX runtime:", e)
-        return 0.5
+    # Run prediction using NumPy
+    batch = np.expand_dims(seq_encoded, axis=0)
+    probs = numpy_predict(batch)
+    return float(probs[0])
 
 @app.route('/')
 def home():
@@ -131,9 +218,9 @@ def predict_csv():
             rows_to_process.append(row)
             sequences_to_predict.append(seq)
             
-        # Perform batched ONNX prediction
+        # Perform batched NumPy prediction
         probs = []
-        if sequences_to_predict and ort_sess is not None:
+        if sequences_to_predict:
             encoded_list = []
             for seq in sequences_to_predict:
                 seq = seq.upper()
@@ -144,19 +231,11 @@ def predict_csv():
                 encoded_list.append(seq_encoded)
                 
             try:
-                input_name = ort_sess.get_inputs()[0].name
-                output_name = ort_sess.get_outputs()[0].name
-                
                 # Batch of size N: shape (N, MAX_LEN)
                 batch = np.array(encoded_list, dtype=np.int64)
-                ort_outs = ort_sess.run([output_name], {input_name: batch})
-                logits = ort_outs[0]
-                
-                # Apply sigmoid to convert logits to probabilities
-                probs_arr = 1 / (1 + np.exp(-logits))
-                probs = probs_arr.tolist()
+                probs = numpy_predict(batch).tolist()
             except Exception as e:
-                print("Batch prediction error in ONNX runtime:", e)
+                print("Batch prediction error in NumPy runtime:", e)
                 probs = [0.5] * len(sequences_to_predict)
         else:
             probs = [0.5] * len(sequences_to_predict)

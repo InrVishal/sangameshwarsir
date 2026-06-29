@@ -11,8 +11,12 @@ venv/
 uploads/
 train_model_backup.py.html
 
-# Ignore PyTorch weights (we use ONNX enhancer_model.onnx)
+# Ignore PyTorch weights and ONNX models
 *.pth
+*.onnx
+
+# Track NumPy weights (.npz)
+!enhancer_model_weights.npz
 
 # Allow preview.csv to be committed so Vercel users can test batch uploads
 !preview.csv
