@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, jsonify
 import os
-import pandas as pd
+import csv
 import numpy as np
 
 # Constants
@@ -169,48 +169,109 @@ def predict_csv():
     file.save(filepath)
     
     try:
+        rows = []
         if filepath.endswith('.csv'):
-            df = pd.read_csv(filepath, nrows=150)
+            # Read CSV using built-in csv module with header auto-scanning
+            with open(filepath, mode='r', encoding='utf-8-sig') as f:
+                reader = csv.reader(f)
+                all_csv_rows = list(reader)
+                
+            # Scan the first few rows to locate the header row
+            header_row_idx = None
+            for i, row in enumerate(all_csv_rows[:10]):
+                row_str_vals = [str(val).lower() for val in row if val is not None]
+                if any('sequence' in val or 'seq' in val or 'class' in val or 'label' in val for val in row_str_vals):
+                    header_row_idx = i
+                    break
+            
+            if header_row_idx is None:
+                header_row_idx = 0
+                
+            headers = all_csv_rows[header_row_idx]
+            
+            # Parse subsequent rows
+            for row_cells in all_csv_rows[header_row_idx + 1:]:
+                row_dict = {}
+                for header, val in zip(headers, row_cells):
+                    if header:
+                        row_dict[header] = val
+                rows.append(row_dict)
+                if len(rows) >= 150:
+                    break
+                    
         elif filepath.endswith('.xlsx'):
-            df = pd.read_excel(filepath, nrows=150)
+            # Read Excel using openpyxl directly with header auto-scanning
+            import openpyxl
+            wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
+            sheet = wb.active
+            
+            # Scan the first few rows to locate the header row
+            rows_data = list(sheet.iter_rows(max_row=10, values_only=True))
+            header_row_idx = None
+            for i, row in enumerate(rows_data):
+                row_str_vals = [str(val).lower() for val in row if val is not None]
+                if any('sequence' in val or 'seq' in val or 'class' in val or 'label' in val for val in row_str_vals):
+                    header_row_idx = i
+                    break
+            
+            if header_row_idx is None:
+                header_row_idx = 0
+            
+            # Extract headers from the identified header row
+            headers = []
+            for cell in rows_data[header_row_idx]:
+                headers.append(str(cell) if cell is not None else "")
+            
+            # Read subsequent rows starting from the row after headers
+            row_count = 0
+            for row_cells in sheet.iter_rows(min_row=header_row_idx + 2, values_only=True):
+                row_dict = {}
+                for header, val in zip(headers, row_cells):
+                    if header:
+                        row_dict[header] = val if val is not None else ""
+                rows.append(row_dict)
+                row_count += 1
+                if row_count >= 150:
+                    break
+            wb.close()
         else:
             return jsonify({'error': 'Invalid file type. Please upload a CSV or XLSX file.'}), 400
             
+        if not rows:
+            return jsonify({'error': 'No data found in file.'}), 400
+            
+        columns = list(rows[0].keys())
+        
         # Find combination of columns
         seq_col = None
-        for col in df.columns:
+        for col in columns:
             if 'seq' in col.lower() or 'sequence' in col.lower():
                 seq_col = col
                 break
         
         if not seq_col:
-            # Fallback to the second column if similar to CDD data
-            if 'sequence' in df.iloc[0].values or len(df.columns) >= 2:
-                seq_col = df.columns[1]
+            # Fallback to the second column
+            if len(columns) >= 2:
+                seq_col = columns[1]
             else:
                 return jsonify({'error': 'Could not identify a Sequence column. Please ensure there is a column named "sequence".'}), 400
                 
         class_col = None
-        for col in df.columns:
+        for col in columns:
             if 'class' in col.lower() or 'label' in col.lower():
                 class_col = col
                 break
-                
-        if not class_col:
-            result_vals = [str(v).lower() for v in df.iloc[0].values]
-            if 'class' in result_vals or 'label' in result_vals:
-                class_col = df.columns[0]
                 
         # Collect up to 100 valid sequences
         sequences_to_predict = []
         rows_to_process = []
         
-        for idx, row in df.iterrows():
+        for row in rows:
             if len(rows_to_process) >= 100:
                 break
                 
-            seq = str(row[seq_col])
-            # If the CSV includes headers inside the data occasionally
+            seq = str(row.get(seq_col, '')).strip()
+            # If the file includes headers inside the data occasionally
             if seq.lower() == 'sequence': continue 
             
             if len(seq) < 10: continue
@@ -257,9 +318,10 @@ def predict_csv():
                 'confidence': f"{(prob if pred_label == 1 else 1-prob) * 100:.2f}%"
             }
             
-            if class_col and not pd.isna(row[class_col]):
+            val = row.get(class_col)
+            if class_col and val is not None and str(val).strip() != "":
                 try: # try parsing label
-                    actual_label = int(float(row[class_col]))
+                    actual_label = int(float(val))
                     res_dict['actual'] = 'Enhancer' if actual_label == 1 else 'Non-Enhancer'
                     if pred_label == actual_label:
                         correct += 1
