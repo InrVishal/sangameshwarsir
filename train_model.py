@@ -60,9 +60,7 @@ class DeepGenomicModel(nn.Module):
         self.fc2 = nn.Linear(32, 1)
 
     def forward(self, x):
-        print("x shape inside forward:", x.shape)
         x = self.embedding(x)
-        print("x shape after embedding:", x.shape)
         x = x.permute(0, 2, 1)
         x = self.conv1(x)
         x = self.relu(x)
