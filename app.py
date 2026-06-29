@@ -8,7 +8,7 @@ BASE_TO_INT = {'A': 0, 'C': 1, 'G': 2, 'T': 3, 'N': 4}
 MAX_LEN = 1170
 
 app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = 'uploads'
+app.config['UPLOAD_FOLDER'] = '/tmp/uploads'
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 # Load model weights
