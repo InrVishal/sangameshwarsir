@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DeepGen | Regulatory Element Predictor</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=Outfit:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="background-animation">
+        <div class="blob blob-1"></div>
+        <div class="blob blob-2"></div>
+    </div>
+
+    <nav class="navbar">
+        <div class="logo">🧬 Deep<span>Gen</span></div>
+        <ul class="nav-links">
+            <li><a href="#">Dashboard</a></li>
+            <li><a href="#">Model Insights</a></li>
+        </ul>
+    </nav>
+
+    <main class="container">
+        <header class="header">
+            <h1>Predict Regulatory Interactions</h1>
+            <p>Upload a sequence batch or test individual genomic sequences using our advanced Deep Learning BiLSTM model.</p>
+        </header>
+
+        <div class="app-layout">
+            <!-- Left Column: Input and Batch Upload -->
+            <section class="card interface-section">
+                <div class="tabs">
+                    <button class="tab-btn active" onclick="switchTab('text-input')">Single Sequence</button>
+                    <button class="tab-btn" onclick="switchTab('csv-upload')">Batch Upload (CSV/XLSX)</button>
+                </div>
+
+                <!-- Text Input Panel -->
+                <div id="text-input" class="tab-content active">
+                    <div class="input-group">
+                        <label for="sequence-text">DNA Sequence Base Pairs</label>
+                        <textarea id="sequence-text" placeholder="e.g. ATCGGATCCG..."></textarea>
+                    </div>
+                    <button class="primary-btn" onclick="predictText()">Analyze Sequence</button>
+                    
+                    <div id="text-result" class="result-box hidden">
+                        <h3 id="res-class">Result</h3>
+                        <div class="metric">
+                            <span>Confidence Model Score:</span>
+                            <span id="res-prob" class="highlight">--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- CSV Upload Panel -->
+                <div id="csv-upload" class="tab-content">
+                    <div class="upload-area" id="drop-area">
+                        <input type="file" id="file-input" accept=".csv, .xlsx" hidden>
+                        <div class="upload-icon">📂</div>
+                        <h3>Drag & Drop your CSV/XLSX file here</h3>
+                        <p>or</p>
+                        <button class="secondary-btn" onclick="document.getElementById('file-input').click()">Browse Files</button>
+                        <p id="file-name" class="file-name"></p>
+                    </div>
+                    <button class="primary-btn" onclick="uploadDataset()">Process Dataset</button>
+                    
+                    <div id="csv-result" class="result-box hidden">
+                        <div class="accuracy-panel">
+                            <h3>Batch Prediction Performance</h3>
+                            <div class="accuracy-score">
+                                <span class="acc-val" id="batch-acc">--</span>
+                                <span class="acc-lbl">Overall Accuracy</span>
+                            </div>
+                            <p id="batch-stats">Processed 0 sequences.</p>
+                        </div>
+                        
+                        <div class="table-container">
+                            <table id="results-table">
+                                <thead>
+                                    <tr>
+                                        <th>Sequence Preview</th>
+                                        <th>Model Prediction</th>
+                                        <th>Confidence</th>
+                                        <th>Actual</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="results-body">
+                                    <!-- Data will be populated here -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right Column: Interactive 3D Visualizer -->
+            <section class="card visualizer-section">
+                <div class="visualizer-header">
+                    <h2>3D DNA Interaction Simulation</h2>
+                    <p class="subtitle">Real-time Molecular Rendering & Chromatin Looping</p>
+                </div>
+                <div class="visualizer-container">
+                    <div id="dna-canvas-container">
+                        <!-- Three.js Canvas will be injected here -->
+                    </div>
+                    
+                    <div class="viz-controls">
+                        <button id="btn-rotate" class="viz-btn active" onclick="toggleRotation()">Pause Rotation</button>
+                        <button id="btn-view" class="viz-btn" onclick="resetVisualizerView()">Reset View</button>
+                    </div>
+
+                    <div class="viz-legend">
+                        <div class="legend-item"><span class="dot color-a"></span>A</div>
+                        <div class="legend-item"><span class="dot color-t"></span>T</div>
+                        <div class="legend-item"><span class="dot color-g"></span>G</div>
+                        <div class="legend-item"><span class="dot color-c"></span>C</div>
+                        <div class="legend-item"><span class="dot color-n"></span>N</div>
+                    </div>
+
+                    <div class="viz-status-card">
+                        <div class="status-header">Current State: <span id="viz-state-label" class="state-idle">Idle (Straight Helix)</span></div>
+                        <div id="viz-chromatin-status" class="status-description">Enter or select a sequence to load the 3D model. When an active enhancer is detected, the model will dynamically loop.</div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>

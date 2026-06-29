@@ -1,0 +1,18 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Large datasets and documentation PDFs
+*.xlsx
+*.pdf
+uploads/
+train_model_backup.py.html
+
+# Ignore PyTorch weights (we use ONNX enhancer_model.onnx)
+*.pth
+
+# Allow preview.csv to be committed so Vercel users can test batch uploads
+!preview.csv
